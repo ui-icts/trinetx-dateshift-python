@@ -1,0 +1,6 @@
+/shifted
+/venv
+
+*.xlsx
+*.csv
+*.spec

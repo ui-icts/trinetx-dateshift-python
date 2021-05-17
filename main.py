@@ -8,7 +8,10 @@ from tqdm import tqdm
 id_column = 'patient_id'
 target_data_type = 'DATETIME (YYYYMMDD)'
 dd_filename = 'datadictionary.xlsx'
-
+log_file_path = 'log.csv'
+log_sample_file_path = 'log_sample.csv'
+log_df = pd.DataFrame([], columns=['timestamp', 'message'])
+verification_log_dfs = []
 
 # adapted from REDCap
 def get_shift_days(hex_series):
@@ -16,6 +19,13 @@ def get_shift_days(hex_series):
     hex_series = hex_series.apply(int, base=16)
     shift_days = round(hex_series / pow(10, 8))
     return shift_days
+
+
+def add_to_log(string, print_to_console=True):
+    log_df.loc[len(log_df.index)] = [pd.Timestamp.today(), string]
+
+    if print_to_console:
+        print(string)
 
 
 root = Tk()
@@ -30,7 +40,7 @@ root.destroy()
 try:
     os.mkdir(shifted_dir)
 except OSError as error:
-    print(error)
+    add_to_log(error)
 
 datadict_df = pd.read_excel(os.path.join(dataset_dir, dd_filename))
 is_datetime = datadict_df['Data Type'] == target_data_type
@@ -51,31 +61,47 @@ for entry in os.scandir(dataset_dir):
         source_file = os.path.join(dataset_dir, filename)
         shifted_file = os.path.join(shifted_dir, filename)
 
-        print("Processing '" + filename + "'...", end="")
+        log_str = "Processing '" + filename + "'..."
+        print(log_str, end="")
+        add_to_log(log_str, False)
 
         if filename in date_element_lookup.keys():
             try:
                 df = pd.read_csv(source_file, parse_dates=date_element_lookup[filename])
 
                 if len(df) > 0:
-                    print("found " + str(len(date_element_lookup[filename])) + " date column(s), shifting...")
+                    add_to_log("found " + str(len(date_element_lookup[filename])) + " date column(s), shifting...")
 
                     # shift dates by x days (calculated using id column)
                     for date_element in date_element_lookup[filename]:
+                        shift_days = get_shift_days(df[id_column])
+
+                        data = [df[id_column], df[date_element].copy(), shift_days]
+
                         df[date_element] = tqdm(
-                            df[date_element] - pd.to_timedelta(get_shift_days(df[id_column]), 'D'),
+                            df[date_element] - pd.to_timedelta(shift_days, 'D'),
                             desc=date_element
                         )
 
+                        data.append(df[date_element])
+                        headers = ['patient_id', 'original_date', 'shift_days', 'new_date']
+
+                        # log first 10 dateshifts for validation
+                        verification_log_dfs.append(pd.concat(data, axis=1, keys=headers).head(10))
+
                     # save shifted csv
-                    print("Saving shifted file to " + shifted_file)
+                    add_to_log("Saving shifted file to " + shifted_file)
                     df.to_csv(shifted_file, index=False, header=True, date_format='%Y%m%d')
                 else:
-                    print('zero rows found, skipping')
+                    add_to_log('zero rows found, skipping')
 
             except FileNotFoundError:
-                print('file not found, skipping')
+                add_to_log('file not found, skipping')
         else:
             # no dates to shift, just copy file
-            print('no date columns found, copying as-is')
+            add_to_log('no date columns found, copying as-is')
             copyfile(source_file, shifted_file)
+
+log_df.to_csv(log_file_path, index=False, header=True, date_format='%Y-%m-%d %H:%M:%S')
+pd.concat(verification_log_dfs).to_csv(log_sample_file_path, index=False, header=True, date_format='%Y-%m-%d')
+
